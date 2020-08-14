@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+  <head>
+	<meta http-equiv="Content-type" content="text/html; charset=utf-8"/>
+	<title>Testing worker sync indexeddb</title>
+	<link rel="shortcut icon" href="/favicon.png" />
+	<script type="module">
+
+function log(msg) {
+	document.getElementsByTagName('body')[0].innerHTML += msg + '\n';
+}
+  function start() {
+	var myDbResult = window.indexedDB.open('myDatabase', 1);
+	myDbResult.onupgradeneeded = function() {
+		var myDb = myDbResult.result;
+    myDb.createObjectStore('store', { keyPath: "key" });
+	}
+	myDbResult.onsuccess = function() {
+	var myDb = myDbResult.result;
+
+  var myWorker = new Worker('worker.js', { type: "module" });
+
+	var shared_array_buf = new SharedArrayBuffer(1024);
+	var array_buf = new Int32Array(shared_array_buf);
+	myWorker.onmessage = function(e) {
+    let state = Atomics.load(array_buf, 0);
+		if (state == 1) {
+//			console.log('worker set query received');
+			let key = array_buf.slice(1, 5);
+			let value = array_buf.slice(5, 9);
+			var tx = myDb.transaction('store', 'readwrite');
+      var store = tx.objectStore('store');
+			var request = store.put({
+				key: key,
+			  value: value,
+			});
+			request.onsuccess = function(event) {
+	  		Atomics.store(array_buf, 0, 3); // ack set
+	  		Atomics.notify(array_buf, 0);
+			};
+			request.onerror = function(event) {
+  			Atomics.store(array_buf, 0, 4); // ack set
+  			Atomics.notify(array_buf, 0);
+			};
+			//myWorker.postMessage(array_buf.slice(0,1));
+			return;
+		}
+		if (state == 2) {
+//			console.log('worker get query received');
+			let key = array_buf.slice(1, 5);
+			var tx = myDb.transaction('store', 'readonly');
+      var store = tx.objectStore('store');
+ 			var request = store.get(key);
+			request.onsuccess = function(event) {
+  			array_buf.set(request.result.value, 1);
+	  		Atomics.store(array_buf, 0, 3); // ack set
+	  		Atomics.notify(array_buf, 0);
+			};
+			request.onerror = function(event) {
+  			Atomics.store(array_buf, 0, 4); // ack set
+  			Atomics.notify(array_buf, 0);
+			};
+			//myWorker.postMessage(array_buf.slice(0,5));
+			return;
+		}
+		if (state == 0) {
+			Atomics.store(array_buf, 0, 3); // ack set
+			window.setTimeout(function() {
+  			Atomics.notify(array_buf, 0);
+			}, 500);
+			return;
+		}
+//		console.log('Ignored worker message' + e);
+	}
+	myWorker.postMessage(shared_array_buf);
+	};
+	}
+
+	start();
+	</script>
+  </head>
+  <body style="white-space: pre"></body>
+</html>
